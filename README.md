@@ -1,5 +1,8 @@
 # Skibims IoT Sensor System
 
+Team Code: UNI169
+Team Name: skibims
+
 ## Overview
 
 This project is an IoT-based sensor system that collects environmental data using an ESP32 microcontroller and transmits it via MQTT to a Flask-based backend, which stores the data in MongoDB.
