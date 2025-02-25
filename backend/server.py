@@ -8,71 +8,84 @@ import threading
 import os
 from dotenv import load_dotenv
 import logging
+import sys
+
 
 load_dotenv()
 
 app = Flask(__name__)
 
+# Configure Logging
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ])
+
 # MongoDB Configuration
-MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
-db = client["skibims_db"]
-collection = db["sensor_data"]
+def setup_mongo():
+    logging.info("Setting up MongoDB...")
+    MONGO_URI = os.getenv("MONGO_URI")
+    client = MongoClient(MONGO_URI, server_api=ServerApi('1'))
+    db = client["skibims_db"]
+    collection = db["sensor_data"]
+    logging.info("MongoDB setup complete")
+    return collection
+
+
+collection = setup_mongo()
 
 # MQTT Configuration
-# Change to your broker address
-MQTT_BROKER = os.getenv("MQTT_BROKER", "broker.emqx.io")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 8084))
-MQTT_TOPIC = os.getenv("MQTT_TOPIC", "/UNI169/skibims/sensor")
-
-print("MQTT Broker:", MQTT_BROKER)
-print("MQTT Port:", MQTT_PORT)
-
-logging.basicConfig(level=logging.DEBUG,
-                    format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
+MQTT_BROKER = "broker.emqx.io"
+MQTT_TOPIC = "/UNI169/skibims/sensor"
 
 
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, reason_code, properties):
     """Callback when connected to MQTT broker"""
-    logger.debug(f"Connected to MQTT broker with result code {rc}")
-    client.subscribe(MQTT_TOPIC)
+    if reason_code == 0:
+        logging.info("Connected to MQTT broker successfully")
+        client.subscribe(MQTT_TOPIC)
+    else:
+        logging.error(f"Failed to connect, return code {reason_code}")
+
+
+def on_subscribe(client, userdata, mid, reason_code_list, properties):
+    logging.info(f"Subscribed to topic: {MQTT_TOPIC}")
 
 
 def on_message(client, userdata, msg):
     """Callback when a message is received from MQTT"""
-    logger.debug(f"Message received on topic {msg.topic}: {msg.payload}")
-
     try:
         payload = json.loads(msg.payload.decode())
-        logger.debug(f"Decoded payload: {payload}")
+        logging.info(f"Received payload: {payload}")
 
         # Validate required fields
-        required_fields = {"device_id", "temp", "humidity", "light", "type"}
+        required_fields = {"device_id", "type"}
         if not all(field in payload for field in required_fields):
-            logger.warning(f"Invalid message structure: {payload}")
+            logging.warning(f"Invalid message structure: {payload}")
             return
 
         # Add timestamp
-        payload["timestamp"] = datetime.utcnow()
+        payload["timestamp"] = datetime.now()
 
         # Store in MongoDB
         collection.insert_one(payload)
-        logger.info(f"Data stored successfully: {payload}")
+        logging.info(f"Data stored successfully: {payload}")
 
     except Exception as e:
-        logger.error(f"Error processing message: {e}")
-
-
-# Initialize MQTT client
-mqtt_client = mqtt.Client()
-mqtt_client.on_connect = on_connect
-mqtt_client.on_message = on_message
+        logging.error(f"Error processing message: {e}")
 
 
 def run_mqtt():
     """Run MQTT client in a separate thread"""
-    mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_subscribe = on_subscribe
+    mqtt_client.on_message = on_message
+    logging.info("Connecting to MQTT broker...")
+    mqtt_client.connect(MQTT_BROKER)
+    logging.info("Listening for messages...")
     mqtt_client.loop_forever()
 
 
@@ -99,5 +112,4 @@ def get_sensor_data():
 
 
 if __name__ == "__main__":
-    # Disable reloader to prevent duplicate MQTT connections
-    app.run(use_reloader=False)
+    app.run(debug=True, use_reloader=False)
